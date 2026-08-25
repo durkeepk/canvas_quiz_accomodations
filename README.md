@@ -11,7 +11,9 @@ Instead of opening every quiz and using **Moderate This Quiz** one at a time, th
 - handles courses where quizzes have **different time limits**;
 - skips untimed Classic Quiz items automatically;
 - shows you exactly what it plans to change;
-- requires you to type `YES` before it changes anything.
+- requires you to type `YES` before it changes anything;
+- lets you process **multiple students in the same course without restarting the script**;
+- lets you switch quiz engines or move to another course while keeping the same Canvas session open.
 
 > **Important scope:** The Classic Quizzes workflow has been tested in a live Canvas course. The New Quizzes workflow uses Canvas's documented accommodations API, but you should verify the first change manually in your own Canvas environment before relying on it broadly.
 
@@ -432,6 +434,37 @@ YES
 
 Anything else cancels the operation.
 
+### 7.7 Continue with another student
+
+After a student's accommodation is applied (or cancelled), the script stays open and asks:
+
+```text
+What would you like to do next?
+  1 - Add an accommodation for another student in this same course
+  2 - Switch quiz engine in this same course
+  3 - Choose a different course
+  4 - Exit
+```
+
+If you are processing several accommodation letters for the same class, choose **1**.
+
+The script keeps the following information in memory for the current run:
+
+- your Canvas access token;
+- the course;
+- the selected quiz engine;
+- the quiz list and time limits.
+
+It then asks only for the next student's information and accommodation. You do **not** have to restart Python, paste the course URL again, or paste your token again.
+
+Choose **2** if the same course also uses the other quiz engine.
+
+Choose **3** if you want to work in another Canvas course. The script will ask for the new course URL but will keep using the access token you already entered.
+
+Choose **4** when you are finished.
+
+> The token is kept only in the running program's memory. The script does not write it to a file.
+
 ---
 
 ## 8. How the extra-time calculation works
@@ -697,6 +730,8 @@ preview exact changes
 type YES
       ↓
 verify in Canvas
+      ↓
+next student in the same course (optional)
 ```
 
 ---

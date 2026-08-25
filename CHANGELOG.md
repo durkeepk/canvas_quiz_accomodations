@@ -4,6 +4,13 @@
 
 Initial public version.
 
+### Multi-student workflow
+
+- Continue directly to another student in the same course after each accommodation.
+- Switch between Classic and New Quizzes without restarting.
+- Move to another Canvas course without re-entering the API token.
+- Cache the selected course's quiz list during a run to reduce repetitive API reads.
+
 ### Features
 
 - Beginner-friendly command-line workflow for macOS and Windows.

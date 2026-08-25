@@ -183,48 +183,6 @@ def get_accommodation():
     raise ValueError("Please choose 1 or 2.")
 
 
-def classic_plan(canvas, course_id, accommodation):
-    quizzes = canvas.get_all(f"/api/v1/courses/{course_id}/quizzes")
-
-    timed = []
-    untimed = []
-
-    for quiz in quizzes:
-        limit = quiz.get("time_limit")
-        if limit is None:
-            untimed.append(quiz)
-            continue
-
-        try:
-            limit = int(limit)
-        except (TypeError, ValueError):
-            untimed.append(quiz)
-            continue
-
-        if limit <= 0:
-            untimed.append(quiz)
-            continue
-
-        if accommodation["mode"] == "multiplier":
-            extra = round_extra(limit, accommodation["multiplier"])
-        else:
-            extra = accommodation["extra"]
-
-        timed.append(
-            {
-                "quiz_id": quiz["id"],
-                "title": quiz.get("title", f"Quiz {quiz['id']}"),
-                "base": limit,
-                "extra": extra,
-                "total": limit + extra,
-            }
-        )
-
-    if not timed:
-        raise RuntimeError("No timed Classic Quizzes were found in this course.")
-
-    return timed, untimed
-
 
 def new_quiz_time_limit_minutes(quiz):
     """
@@ -268,77 +226,6 @@ def new_quiz_time_limit_minutes(quiz):
 
     return None
 
-
-def new_quiz_plan(canvas, course_id, accommodation):
-    quizzes = canvas.get_all(f"/api/quiz/v1/courses/{course_id}/quizzes")
-
-    if not quizzes:
-        raise RuntimeError("No New Quizzes were found in this course.")
-
-    # If the accommodation itself is an exact number of extra minutes, Canvas
-    # supports applying that fixed value at the course level.
-    if accommodation["mode"] == "exact":
-        return {
-            "strategy": "course",
-            "extra": accommodation["extra"],
-            "quizzes": quizzes,
-        }
-
-    plan = []
-    missing_limits = []
-
-    for quiz in quizzes:
-        base = new_quiz_time_limit_minutes(quiz)
-
-        if base is None:
-            missing_limits.append(quiz)
-            continue
-
-        extra = round_extra(base, accommodation["multiplier"])
-
-        plan.append(
-            {
-                # New Quizzes API uses the assignment ID in this route.
-                "assignment_id": quiz.get("id"),
-                "title": quiz.get("title", f"New Quiz {quiz.get('id')}"),
-                "base": base,
-                "extra": extra,
-                "total": base + extra,
-            }
-        )
-
-    if missing_limits:
-        names = ", ".join(
-            str(q.get("title", q.get("id")))
-            for q in missing_limits[:5]
-        )
-        more = "..." if len(missing_limits) > 5 else ""
-
-        raise RuntimeError(
-            "Canvas did not expose a readable time limit for one or more "
-            f"New Quizzes ({names}{more}). The script will not guess a "
-            "multiplier. Set those accommodations manually or use an exact "
-            "extra-minute accommodation if that matches the approved accommodation."
-        )
-
-    if not plan:
-        raise RuntimeError("No timed New Quizzes with readable time limits were found.")
-
-    unique_extras = sorted({item["extra"] for item in plan})
-
-    if len(unique_extras) == 1:
-        return {
-            "strategy": "course",
-            "extra": unique_extras[0],
-            "plan": plan,
-            "quizzes": quizzes,
-        }
-
-    return {
-        "strategy": "per_quiz",
-        "plan": plan,
-        "quizzes": quizzes,
-    }
 
 
 def fmt_minutes(value):
@@ -474,41 +361,162 @@ def apply_new_quizzes(canvas, course_id, student_id, plan):
     return results
 
 
-def main():
-    print("\nCanvas Quiz Accommodation Helper")
-    print("================================\n")
+def choose_engine():
+    print("\nWhich quiz engine do you want to modify?")
+    print("  1 - Classic Quizzes")
+    print("  2 - New Quizzes")
 
-    course_url = ask("Paste the Canvas course URL")
-    base_url, course_id = parse_course_url(course_url)
+    quiz_mode = ask("Choose 1 or 2")
 
-    token = getpass.getpass("Paste your Canvas access token (hidden): ").strip()
-    if not token:
-        raise RuntimeError("No access token was entered.")
+    if quiz_mode == "1":
+        return "classic"
+    if quiz_mode == "2":
+        return "new"
 
-    canvas = Canvas(base_url, token)
+    raise ValueError("Please choose 1 or 2.")
 
+
+def prepare_course(canvas, course_id, engine):
     course = canvas.get(f"/api/v1/courses/{course_id}")
-    print(f"\nCourse found: {course.get('name')} (ID {course_id})")
 
+    if engine == "classic":
+        quizzes = canvas.get_all(f"/api/v1/courses/{course_id}/quizzes")
+        return course, quizzes
+
+    quizzes = canvas.get_all(f"/api/quiz/v1/courses/{course_id}/quizzes")
+    return course, quizzes
+
+
+def classic_plan_from_quizzes(quizzes, accommodation):
+    timed = []
+    untimed = []
+
+    for quiz in quizzes:
+        limit = quiz.get("time_limit")
+
+        if limit is None:
+            untimed.append(quiz)
+            continue
+
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            untimed.append(quiz)
+            continue
+
+        if limit <= 0:
+            untimed.append(quiz)
+            continue
+
+        if accommodation["mode"] == "multiplier":
+            extra = round_extra(limit, accommodation["multiplier"])
+        else:
+            extra = accommodation["extra"]
+
+        timed.append(
+            {
+                "quiz_id": quiz["id"],
+                "title": quiz.get("title", f"Quiz {quiz['id']}"),
+                "base": limit,
+                "extra": extra,
+                "total": limit + extra,
+            }
+        )
+
+    if not timed:
+        raise RuntimeError("No timed Classic Quizzes were found in this course.")
+
+    return timed, untimed
+
+
+def new_quiz_plan_from_quizzes(quizzes, accommodation):
+    if not quizzes:
+        raise RuntimeError("No New Quizzes were found in this course.")
+
+    if accommodation["mode"] == "exact":
+        return {
+            "strategy": "course",
+            "extra": accommodation["extra"],
+            "quizzes": quizzes,
+        }
+
+    plan = []
+    missing_limits = []
+
+    for quiz in quizzes:
+        base = new_quiz_time_limit_minutes(quiz)
+
+        if base is None:
+            missing_limits.append(quiz)
+            continue
+
+        extra = round_extra(base, accommodation["multiplier"])
+
+        plan.append(
+            {
+                "assignment_id": quiz.get("id"),
+                "title": quiz.get("title", f"New Quiz {quiz.get('id')}"),
+                "base": base,
+                "extra": extra,
+                "total": base + extra,
+            }
+        )
+
+    if missing_limits:
+        names = ", ".join(
+            str(q.get("title", q.get("id")))
+            for q in missing_limits[:5]
+        )
+        more = "..." if len(missing_limits) > 5 else ""
+
+        raise RuntimeError(
+            "Canvas did not expose a readable time limit for one or more "
+            f"New Quizzes ({names}{more}). The script will not guess a "
+            "multiplier. Set those accommodations manually or use an exact "
+            "extra-minute accommodation if that matches the approved accommodation."
+        )
+
+    if not plan:
+        raise RuntimeError("No timed New Quizzes with readable time limits were found.")
+
+    unique_extras = sorted({item["extra"] for item in plan})
+
+    if len(unique_extras) == 1:
+        return {
+            "strategy": "course",
+            "extra": unique_extras[0],
+            "plan": plan,
+            "quizzes": quizzes,
+        }
+
+    return {
+        "strategy": "per_quiz",
+        "plan": plan,
+        "quizzes": quizzes,
+    }
+
+
+def process_student(canvas, course, course_id, engine, cached_quizzes):
     student_search = ask(
-        "Enter the student's Canvas login/email or full name "
+        "\nEnter the student's Canvas login/email or full name "
         "(email/login is best)"
     )
 
     matches = find_student(canvas, course_id, student_search)
 
     if len(matches) == 0:
-        raise RuntimeError("No matching active student was found in this course.")
+        print("\nNo matching active student was found in this course.")
+        return
 
     if len(matches) > 1:
         print("\nMore than one student matched:")
         for user in matches:
             print(f"  {user.get('name')} | login: {user.get('login_id')}")
-
-        raise RuntimeError(
-            "Rerun with the student's exact Canvas login/email so only one "
-            "student matches."
+        print(
+            "\nNo change was made. Try this student again using the exact "
+            "Canvas login/email."
         )
+        return
 
     student = matches[0]
     student_id = student["id"]
@@ -517,15 +525,8 @@ def main():
 
     accommodation = get_accommodation()
 
-    print("\nWhich quiz engine do you want to modify?")
-    print("  1 - Classic Quizzes")
-    print("  2 - New Quizzes")
-
-    quiz_mode = ask("Choose 1 or 2")
-
-    if quiz_mode == "1":
-        engine = "classic"
-        plan, untimed = classic_plan(canvas, course_id, accommodation)
+    if engine == "classic":
+        plan, untimed = classic_plan_from_quizzes(cached_quizzes, accommodation)
 
         print(
             f"\nCanvas found {len(plan)} timed Classic Quizzes and "
@@ -537,13 +538,9 @@ def main():
 
         print_classic_plan(plan, accommodation)
 
-    elif quiz_mode == "2":
-        engine = "new"
-        plan = new_quiz_plan(canvas, course_id, accommodation)
-        print_new_plan(plan, accommodation)
-
     else:
-        raise ValueError("Please choose 1 or 2.")
+        plan = new_quiz_plan_from_quizzes(cached_quizzes, accommodation)
+        print_new_plan(plan, accommodation)
 
     print(f"\nCourse: {course.get('name')} (ID {course_id})")
     print(f"Student: {student.get('name')}")
@@ -579,6 +576,69 @@ def main():
         "moderation/accommodation. If quiz durations differ, verify at least one "
         "short quiz and one long quiz."
     )
+
+
+def main():
+    print("\nCanvas Quiz Accommodation Helper")
+    print("================================\n")
+
+    token = None
+
+    while True:
+        course_url = ask("Paste the Canvas course URL")
+        base_url, course_id = parse_course_url(course_url)
+
+        if token is None:
+            token = getpass.getpass(
+                "Paste your Canvas access token (hidden): "
+            ).strip()
+            if not token:
+                raise RuntimeError("No access token was entered.")
+
+        canvas = Canvas(base_url, token)
+        engine = choose_engine()
+        course, cached_quizzes = prepare_course(canvas, course_id, engine)
+
+        print(f"\nCourse found: {course.get('name')} (ID {course_id})")
+
+        while True:
+            process_student(
+                canvas=canvas,
+                course=course,
+                course_id=course_id,
+                engine=engine,
+                cached_quizzes=cached_quizzes,
+            )
+
+            print("\nWhat would you like to do next?")
+            print("  1 - Add an accommodation for another student in this same course")
+            print("  2 - Switch quiz engine in this same course")
+            print("  3 - Choose a different course")
+            print("  4 - Exit")
+
+            choice = ask("Choose 1, 2, 3, or 4")
+
+            if choice == "1":
+                continue
+
+            if choice == "2":
+                engine = choose_engine()
+                course, cached_quizzes = prepare_course(
+                    canvas,
+                    course_id,
+                    engine,
+                )
+                continue
+
+            if choice == "3":
+                print("\nReturning to course selection...\n")
+                break
+
+            if choice == "4":
+                print("\nDone.")
+                return
+
+            print("\nPlease choose 1, 2, 3, or 4.")
 
 
 if __name__ == "__main__":
